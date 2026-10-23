@@ -49,8 +49,31 @@ servo closes 20% of the remaining gap 10 times a second.
 
 ## How I drew it
 
-My viewer is a separate client of my runtime. It records `/xform_world` and draws each link's
-URDF mesh at that link's world matrix, using three.js.
+![The same pose three ways: the link frames from /xform_world, the URDF meshes attached to them, and the finished robot](drawing_steps.jpg)
+
+My viewer is a separate client of my runtime, and it never computes kinematics. Every pose it
+shows comes from `/xform_world`, which holds one 4×4 world matrix for each link. Drawing the
+robot takes three steps:
+
+1. **Link frames.** Each link's matrix is drawn as a small x/y/z axis triad, and lines along the
+   `/tf` tree join the triads. This skeleton is exactly what my runtime computed.
+2. **Attach the parts.** In the URDF, each link's `<visual>` names a mesh and gives an
+   `<origin>` offset inside the link's frame. Each mesh is placed at the link's world matrix
+   times that offset.
+3. **The robot.** With every part in place, the result is Fetch at that pose.
+
+![The runtime's nodes and topics from the choreography to /xform_world, one /xform_world entry with its column-major matrix layout, and the forward-kinematics formula](drawing_pipeline.svg)
+
+**Where the matrices come from.** `robot_state_publisher` combines the URDF with the joint angles
+q from `/joint_states` and publishes one transform per joint on `/tf`. Each transform is
+T_origin · T_motion(q): the joint's fixed offset, then its motion (a rotation for a revolute
+joint, a slide for a prismatic one). `robot_world_state_publisher` starts at the root link and
+walks down the tree, multiplying as it goes:
+X_world(child) = X_world(parent) · T_origin · T_motion(q).
+
+**Reading a matrix.** Each `/xform_world` entry stores its 16 numbers in column-major order,
+`m[4·col + row]`. The upper-left 3×3 block is the link's rotation, and `m[12..14]` is its
+position.
 
 ---
 

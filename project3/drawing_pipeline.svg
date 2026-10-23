@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+  <title>From the choreography to the link matrices on /xform_world</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5ad1ff"/>
+    </marker>
+    <style>
+      .box { fill: #121b2e; stroke: #2a3550; stroke-width: 1.5; }
+      .hot { stroke: #5ad1ff; }
+      .t { fill: #e9eef7; font-size: 14px; font-weight: 700; }
+      .s { fill: #8592a8; font-size: 12.5px; }
+      .c { fill: #5ad1ff; font-size: 12.5px; }
+      .tag { fill: #5d6a80; font-size: 11px; }
+      .h { fill: #8592a8; font-size: 12px; letter-spacing: .08em; }
+      .o { fill: #ff9a3c; }
+      .wire { stroke: #5ad1ff; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .cell { font-size: 14px; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="960" height="520" rx="14" fill="#0a0f1a"/>
+
+  <!-- ===== left: the nodes, one tick ===== -->
+  <text class="h" x="24" y="36">MY RUNTIME, 10 TIMES A SECOND</text>
+
+  <g transform="translate(24,52)">
+    <rect class="box" width="390" height="58" rx="10"/>
+    <text class="t" x="16" y="25">finite_state_machine</text>
+    <text class="tag" x="374" y="25" text-anchor="end">demo</text>
+    <text class="s" x="16" y="45">steps through the fetch_wave states</text>
+  </g>
+  <path class="wire" d="M60,111 V143"/>
+  <text class="c" x="74" y="131">/joint_trajectory</text><text class="s" x="216" y="131">setpoints</text>
+
+  <g transform="translate(24,144)">
+    <rect class="box" width="390" height="58" rx="10"/>
+    <text class="t" x="16" y="25">joint_state_publisher</text>
+    <text class="tag" x="374" y="25" text-anchor="end">demo</text>
+    <text class="s" x="16" y="45">moves each joint 20% toward its setpoint</text>
+  </g>
+  <path class="wire" d="M60,203 V235"/>
+  <text class="c" x="74" y="223">/joint_states</text><text class="s" x="186" y="223">joint angles q</text>
+
+  <g transform="translate(24,236)">
+    <rect class="box" width="390" height="58" rx="10"/>
+    <text class="t" x="16" y="25">robot_state_publisher</text>
+    <text class="s" x="16" y="45">URDF (param_server) + q → joint transforms</text>
+  </g>
+  <path class="wire" d="M60,295 V327"/>
+  <text class="c" x="74" y="315">/tf</text><text class="s" x="110" y="315">parent → child transforms</text>
+
+  <g transform="translate(24,328)">
+    <rect class="box" width="390" height="58" rx="10"/>
+    <text class="t" x="16" y="25">robot_world_state_publisher</text>
+    <text class="s" x="16" y="45">walks the tree down from the root link</text>
+  </g>
+  <path class="wire" d="M60,387 V419"/>
+  <text class="c" x="74" y="407">/xform_world</text><text class="s" x="178" y="407">one world matrix per link</text>
+
+  <g transform="translate(24,420)">
+    <rect class="box hot" width="390" height="58" rx="10"/>
+    <text class="t" x="16" y="25">my viewer</text>
+    <text class="s" x="16" y="45">draws each link's URDF mesh at its matrix</text>
+  </g>
+
+  <line x1="446" y1="28" x2="446" y2="490" stroke="#2a3550" stroke-dasharray="4 6"/>
+
+  <!-- ===== right: one entry of /xform_world ===== -->
+  <text class="h" x="478" y="36">ONE ENTRY OF /XFORM_WORLD</text>
+  <g transform="translate(478,52)">
+    <rect class="box" width="300" height="104" rx="10"/>
+    <text class="s" x="14" y="24">{</text>
+    <text class="s" x="28" y="44">"child_frame_id": <tspan fill="#5ad1ff">"gripper_link"</tspan>,</text>
+    <text class="s" x="28" y="64">"matrix": [m0, m1, …, m15]</text>
+    <text class="s" x="14" y="84">}</text>
+  </g>
+
+  <text class="s" x="478" y="190">column-major: m[4·col + row]</text>
+  <g transform="translate(478,204)">
+    <rect x="0" y="0" width="168" height="102" rx="6" fill="#5ad1ff" fill-opacity="0.10" stroke="#5ad1ff" stroke-opacity="0.5"/>
+    <rect x="172" y="0" width="56" height="102" rx="6" fill="#ff9a3c" fill-opacity="0.12" stroke="#ff9a3c" stroke-opacity="0.6"/>
+    <g class="cell" fill="#e9eef7">
+      <text x="28" y="26">m0</text><text x="84" y="26">m4</text><text x="140" y="26">m8</text>
+      <text x="28" y="58">m1</text><text x="84" y="58">m5</text><text x="140" y="58">m9</text>
+      <text x="28" y="90">m2</text><text x="84" y="90">m6</text><text x="140" y="90">m10</text>
+      <text class="o" x="200" y="26">m12</text><text class="o" x="200" y="58">m13</text><text class="o" x="200" y="90">m14</text>
+    </g>
+    <g class="cell" fill="#5d6a80">
+      <text x="28" y="126">0</text><text x="84" y="126">0</text><text x="140" y="126">0</text><text x="200" y="126">1</text>
+    </g>
+    <text class="c" x="84" y="156" text-anchor="middle">rotation R</text>
+    <text x="200" y="156" text-anchor="middle" font-size="12.5" fill="#ff9a3c">position</text>
+  </g>
+  <g transform="translate(730,204)">
+    <text class="s" x="0" y="26">the link's frame:</text>
+    <text class="s" x="0" y="50">R turns it,</text>
+    <text class="s" x="0" y="70">position moves it</text>
+  </g>
+
+  <text class="t" x="478" y="410">forward kinematics</text>
+  <text x="478" y="436" font-size="13" fill="#e9eef7">X_world(child) = X_world(parent) · T_origin · T_motion(q)</text>
+  <text class="t" x="478" y="470">drawing a part</text>
+  <text x="478" y="494" font-size="13" fill="#e9eef7">mesh pose = X_world(link) · T(<tspan fill="#5ad1ff">&lt;visual&gt;&lt;origin&gt;</tspan>)</text>
+</svg>
