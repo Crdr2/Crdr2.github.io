@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fetch FK Replay</title>
+<style>
+  :root { --bg0: #04060b; --bg1: #141d30; --fg: #e9eef7; --muted: #8592a8; --line: #2a3550;
+          --accent: #ff9a3c; --cyan: #5ad1ff; }
+  html, body { margin: 0; height: 100%; overflow: hidden; color: var(--fg);
+               background: radial-gradient(ellipse 80% 70% at 50% 38%, var(--bg1), var(--bg0) 75%);
+               font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  canvas { display: block; }
+  .hud { position: absolute; pointer-events: none; }
+  #title { left: 20px; top: 16px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  #title b { display: block; color: var(--fg); font-size: 15px; letter-spacing: .18em; }
+  #states { left: 20px; right: 20px; bottom: 64px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--muted); }
+  .pill { padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; transition: all .25s; }
+  .pill.on { color: #120c05; background: var(--accent); border-color: var(--accent);
+             box-shadow: 0 0 18px rgba(255, 154, 60, .55); }
+  #bar { position: absolute; left: 16px; right: 16px; bottom: 14px; display: flex; gap: 10px; align-items: center; }
+  #bar button { font: inherit; color: var(--fg); background: rgba(20, 29, 48, .8); border: 1px solid var(--line);
+                border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+  #bar button[aria-pressed="false"] { color: var(--muted); }
+  #bar input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); }
+  #hint { right: 20px; top: 16px; color: var(--muted); text-align: right; }
+
+  /* teaser mode: big title card, no controls */
+  body.teaser #bar, body.teaser #hint { display: none; }
+  body.teaser #states { bottom: 34px; left: 40px; font-size: 18px; gap: 10px; }
+  body.teaser .pill { padding: 5px 16px; transition: none; }
+  body.teaser #title { left: 40px; top: 34px; font-size: 16px; }
+  body.teaser #title b { font-size: 24px; }
+  #card { inset: 0; display: none; place-content: center; text-align: center; }
+  body.teaser #card { display: grid; }
+  #card h1 { margin: 0; font-size: 64px; letter-spacing: .06em; font-weight: 700; }
+  #card p { margin: 10px 0 0; font-size: 22px; color: var(--cyan); letter-spacing: .3em; text-transform: uppercase; }
+  #fade { inset: 0; background: #000; opacity: 0; }
+  @media (max-width: 560px) {
+    #states { bottom: 56px; font-size: 11px; gap: 3px; } .pill { padding: 2px 6px; }
+    #hint { display: none; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+<div id="title" class="hud"><b>Fetch &middot; forward kinematics</b>replayed from /xform_world</div>
+<div id="hint" class="hud">drag to orbit &middot; scroll to zoom</div>
+<div id="states" class="hud"></div>
+<div id="card" class="hud"><div><h1>Forward kinematics</h1><p>from scratch &middot; no libraries</p></div></div>
+<div id="fade" class="hud"></div>
+<div id="bar">
+  <button id="play" aria-label="Pause">&#10074;&#10074;</button>
+  <input id="time" type="range" min="0" max="1" step="0.01" value="0" aria-label="Time">
+  <button id="showFrames" aria-pressed="true">frames</button>
+  <button id="showTrail" aria-pressed="true">trail</button>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const TEASER = new URLSearchParams(location.search).has('teaser');
+if (TEASER) document.body.classList.add('teaser');
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);  // ROS: z is up
+
+// ---------- renderer, scene, lights ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: TEASER });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 60);
+
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(2.5, -1.8, 4.5);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = key.shadow.camera.bottom = -1.8;
+key.shadow.camera.right = key.shadow.camera.top = 1.8;
+key.shadow.bias = -0.0004;
+key.target.position.set(0.3, 0, 0.6);
+scene.add(key, key.target);
+const rimCool = new THREE.DirectionalLight(0x5ad1ff, 3.0);
+rimCool.position.set(-3, 2.5, 2.2);
+const rimWarm = new THREE.DirectionalLight(0xff9a3c, 2.2);
+rimWarm.position.set(-2.5, -3, 1.2);
+scene.add(rimCool, rimWarm, new THREE.HemisphereLight(0x8fb4ff, 0x0b0d12, 0.35));
+
+// floor: soft shadow + a grid that fades out with distance
+const shadowFloor = new THREE.Mesh(new THREE.CircleGeometry(4, 96), new THREE.ShadowMaterial({ opacity: 0.5 }));
+shadowFloor.receiveShadow = true;
+scene.add(shadowFloor);
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { color: { value: new THREE.Color(0x5ad1ff) } },
+  vertexShader: `varying vec2 p; void main() { p = position.xy;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform vec3 color; varying vec2 p;
+    void main() {
+      vec2 c = p / 0.25;
+      vec2 g = abs(fract(c - 0.5) - 0.5) / fwidth(c);
+      float line = 1.0 - min(min(g.x, g.y), 1.0);
+      float r = length(p);
+      float a = line * 0.28 * smoothstep(3.5, 0.4, r) + 0.10 * smoothstep(1.1, 0.0, r);
+      gl_FragColor = vec4(color, a);
+    }`,
+}));
+grid.position.z = -0.001;
+scene.add(grid);
+
+// ---------- load the robot description, the meshes and the recording ----------
+const [urdfText, gltf, recording] = await Promise.all([
+  fetch('fetch.urdf').then(r => r.text()),
+  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('fetch.glb'),
+  fetch('frames.json').then(r => r.json()),
+]);
+
+// Each link's first <visual>: which mesh, and its <origin> inside the link frame.
+const urdf = new DOMParser().parseFromString(urdfText, 'text/xml');
+const vec = s => (s || '0 0 0').trim().split(/\s+/).map(Number);
+const holders = {};      // link name -> Group whose matrix is the link's /xform_world matrix
+const materials = new Set();
+for (const link of urdf.querySelectorAll('robot > link')) {
+  const visual = link.querySelector(':scope > visual');
+  const mesh = visual && visual.querySelector('geometry > mesh');
+  if (!mesh) continue;
+  const stem = mesh.getAttribute('filename').split('/').pop().replace(/\.(dae|STL)$/i, '');
+  const origin = visual.querySelector(':scope > origin');
+  const part = gltf.scene.getObjectByName(stem).clone(true);
+  part.position.fromArray(vec(origin && origin.getAttribute('xyz')));
+  const [r, p, y] = vec(origin && origin.getAttribute('rpy'));
+  part.rotation.set(r, p, y, 'ZYX');   // URDF rpy: R = Rz(yaw) Ry(pitch) Rx(roll)
+  part.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = o.receiveShadow = true;
+    materials.add(o.material);
+  });
+  const holder = new THREE.Group();
+  holder.matrixAutoUpdate = false;
+  holder.add(part);
+  holders[link.getAttribute('name')] = holder;
+  scene.add(holder);
+}
+
+// The recording: every link's 4x4 column-major world matrix, 10 times a second.
+const frames = recording.frames.filter(f => Object.keys(f.links).length > 0);
+const t0 = frames[0].t;
+const times = frames.map(f => f.t - t0);
+const duration = times[times.length - 1];
+const linkNames = Object.keys(frames[0].links);
+const poses = {};        // link name -> [{p: Vector3, q: Quaternion}] per frame
+for (const name of linkNames) {
+  poses[name] = frames.map(f => {
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    new THREE.Matrix4().fromArray(f.links[name]).decompose(p, q, s);
+    return { p, q };
+  });
+}
+
+function frameAt(t) {   // index i and blend a so that t lies between frame i and i + 1
+  let lo = 0, hi = times.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (times[mid] <= t) lo = mid; else hi = mid; }
+  return [lo, THREE.MathUtils.clamp((t - times[lo]) / (times[hi] - times[lo]), 0, 1)];
+}
+function poseAt(name, t, out = { p: new THREE.Vector3(), q: new THREE.Quaternion() }) {
+  const [i, a] = frameAt(t);
+  const A = poses[name][i], B = poses[name][Math.min(i + 1, times.length - 1)];
+  out.p.lerpVectors(A.p, B.p, a);
+  out.q.slerpQuaternions(A.q, B.q, a);
+  return out;
+}
+
+// ---------- overlays: /tf skeleton with link frames, and a trail behind the gripper ----------
+const skeleton = new THREE.Group();
+const edges = recording.edges.filter(([a, b]) => poses[a] && poses[b]);
+const boneGeometry = new THREE.BufferGeometry();
+boneGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edges.length * 6), 3));
+const boneMaterial = new THREE.LineBasicMaterial({ color: 0x5ad1ff, transparent: true, depthTest: false,
+                                                   blending: THREE.AdditiveBlending });
+skeleton.add(new THREE.LineSegments(boneGeometry, boneMaterial));
+const dotGeometry = new THREE.BufferGeometry();
+dotGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(linkNames.length * 3), 3));
+const dotSprite = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,1)'); grad.addColorStop(0.25, 'rgba(160,230,255,.9)');
+  grad.addColorStop(1, 'rgba(90,209,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const dotMaterial = new THREE.PointsMaterial({ size: 0.07, map: dotSprite, transparent: true, depthTest: false,
+                                               blending: THREE.AdditiveBlending });
+skeleton.add(new THREE.Points(dotGeometry, dotMaterial));
+const axes = linkNames.map(() => {   // a small RGB = xyz triad on every link frame
+  const a = new THREE.AxesHelper(0.07);
+  a.material.depthTest = false; a.material.transparent = true; a.matrixAutoUpdate = false;
+  skeleton.add(a);
+  return a;
+});
+skeleton.renderOrder = 10;
+skeleton.traverse(o => { o.renderOrder = 10; });
+scene.add(skeleton);
+
+const TRAIL_LINK = 'gripper_link', TRAIL_SECONDS = 1.6, TRAIL_SAMPLES = 64;
+const trailMaterial = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { strength: { value: 1 } },
+  vertexShader: `varying float u; void main() { u = uv.x;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform float strength; varying float u;
+    void main() {
+      vec3 c = mix(vec3(0.35, 0.82, 1.0), vec3(1.0, 0.6, 0.24), u);
+      gl_FragColor = vec4(c * 1.6, pow(u, 1.6) * strength);
+    }`,
+});
+const trail = new THREE.Mesh(new THREE.BufferGeometry(), trailMaterial);
+trail.renderOrder = 5;
+scene.add(trail);
+
+// ---------- drawing one moment ----------
+const tmp = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+const ONE = new THREE.Vector3(1, 1, 1);
+const statesEl = document.getElementById('states');
+const stateNames = [...new Set(frames.map(f => f.state).filter(Boolean))];
+statesEl.innerHTML = 'FSM ' + stateNames.map(s => `<span class="pill" data-s="${s}">${s}</span>`).join('');
+let shownState = null;
+
+function setPose(t, { meshOpacity = 1, skeletonOpacity = 1, trailStrength = 1 } = {}) {
+  for (const name of linkNames) {
+    poseAt(name, t, tmp);
+    if (holders[name]) holders[name].matrix.compose(tmp.p, tmp.q, ONE);
+    axes[linkNames.indexOf(name)].matrix.compose(tmp.p, tmp.q, ONE);
+    dotGeometry.attributes.position.setXYZ(linkNames.indexOf(name), tmp.p.x, tmp.p.y, tmp.p.z);
+  }
+  dotGeometry.attributes.position.needsUpdate = true;
+  edges.forEach(([a, b], k) => {
+    const pa = poseAt(a, t).p, pb = poseAt(b, t).p;
+    boneGeometry.attributes.position.setXYZ(2 * k, pa.x, pa.y, pa.z);
+    boneGeometry.attributes.position.setXYZ(2 * k + 1, pb.x, pb.y, pb.z);
+  });
+  boneGeometry.attributes.position.needsUpdate = true;
+
+  // the trail is the gripper's own recent path, so it is the same however you scrub
+  const points = [];
+  for (let k = TRAIL_SAMPLES; k >= 0; k--) {
+    points.push(poseAt(TRAIL_LINK, Math.max(0, t - TRAIL_SECONDS * k / TRAIL_SAMPLES)).p.clone());
+  }
+  trail.geometry.dispose();
+  trail.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), TRAIL_SAMPLES * 2, 0.011, 8);
+  trailMaterial.uniforms.strength.value = trailStrength;
+  trail.visible = trailStrength > 0.01;
+
+  for (const m of materials) {
+    m.transparent = meshOpacity < 0.999;
+    m.opacity = meshOpacity;
+    m.depthWrite = meshOpacity > 0.5;
+  }
+  for (const h of Object.values(holders)) h.visible = meshOpacity > 0.01;
+  boneMaterial.opacity = 0.9 * skeletonOpacity;
+  dotMaterial.opacity = skeletonOpacity;
+  for (const a of axes) a.material.opacity = skeletonOpacity;
+  skeleton.visible = skeletonOpacity > 0.01;
+
+  const state = frames[frameAt(t)[0]].state;
+  if (state !== shownState) {
+    shownState = state;
+    for (const pill of statesEl.children) pill.classList.toggle('on', pill.dataset.s === state);
+  }
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const target = new THREE.Vector3(0.25, 0, 0.95);
+if (TEASER) {
+  // ---------- teaser: a scripted shot, rendered one frame at a time by the capture script ----------
+  const card = document.getElementById('card'), fade = document.getElementById('fade');
+  const ramp = (t, a, b) => THREE.MathUtils.smoothstep(t, a, b);
+  window.teaserLength = Math.min(duration, 14);
+  window.renderAt = t => {
+    const L = window.teaserLength;
+    setPose(t, {
+      skeletonOpacity: 1 - 0.8 * ramp(t, 3.4, 5.0),
+      meshOpacity: ramp(t, 2.6, 4.4),
+      trailStrength: ramp(t, 4.0, 5.0),
+    });
+    card.style.opacity = ramp(t, 0.2, 0.9) * (1 - ramp(t, 2.4, 3.2));
+    statesEl.style.opacity = ramp(t, 3.0, 3.8);
+    document.getElementById('title').style.opacity = ramp(t, 3.0, 3.8);
+    fade.style.opacity = Math.max(1 - ramp(t, 0, 0.5), ramp(t, L - 0.6, L));
+    const s = t / L, e = s * s * (3 - 2 * s);
+    const azimuth = THREE.MathUtils.degToRad(58 - 85 * e);
+    const radius = 5.0 - 0.6 * e, height = 1.2 + 0.3 * Math.sin(Math.PI * s);
+    target.set(0.15, 0, 1.0);
+    camera.position.set(target.x + radius * Math.cos(azimuth), radius * Math.sin(azimuth), height);
+    camera.lookAt(target);
+    renderer.render(scene, camera);
+  };
+  window.ready = true;
+} else {
+  // ---------- interactive replay ----------
+  // start further back on narrow (phone) screens so the whole robot fits
+  camera.position.set(3.4, -2.3, 1.7).sub(target).multiplyScalar(Math.max(1, 1.3 / camera.aspect)).add(target);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.copy(target);
+  controls.enableDamping = true;
+  controls.minDistance = 1;
+  controls.maxDistance = 9;
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.update();
+
+  const playButton = document.getElementById('play'), slider = document.getElementById('time');
+  slider.max = duration;
+  let playing = true, t = 0, last = performance.now();
+  const options = { skeletonOpacity: 0.35, trailStrength: 1 };
+  playButton.onclick = () => {
+    playing = !playing;
+    playButton.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+    playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  };
+  slider.oninput = () => { t = Number(slider.value); };
+  for (const [id, field, on] of [['showFrames', 'skeletonOpacity', 0.35], ['showTrail', 'trailStrength', 1]]) {
+    const button = document.getElementById(id);
+    button.onclick = () => {
+      const pressed = button.getAttribute('aria-pressed') !== 'true';
+      button.setAttribute('aria-pressed', String(pressed));
+      options[field] = pressed ? on : 0;
+    };
+  }
+  renderer.setAnimationLoop(now => {
+    if (playing) {
+      t += Math.min(0.1, (now - last) / 1000);
+      if (t > duration) t = 0;
+      slider.value = t;
+    }
+    last = now;
+    setPose(t, options);
+    controls.update();
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>
