@@ -14,8 +14,12 @@ no kinematics or transform libraries, just quaternions and a walk down the URDF 
 
 ## Try it yourself
 
-Drag to orbit and scroll to zoom. **frames** shows each link's coordinate frame and the `/tf`
-tree that connects them. **trail** traces the gripper's path.
+Fetch starts at **home**. Pick a state below the robot, and Fetch performs that move as my
+runtime recorded it. The FSM only runs forward, so a state further along the cycle is reached by
+passing through the ones in between.
+
+Click any part of the robot to see that link's world matrix from `/xform_world`: rotation on the
+left, position in orange. Drag to orbit, scroll to zoom.
 
 <iframe src="viewer.html" title="Interactive 3D replay of the Fetch choreography"
         style="width: 100%; aspect-ratio: 16 / 9; min-height: 420px; border: 0; border-radius: 8px;"

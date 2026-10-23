@@ -22,11 +22,23 @@
   #bar button { font: inherit; color: var(--fg); background: rgba(20, 29, 48, .8); border: 1px solid var(--line);
                 border-radius: 8px; padding: 5px 10px; cursor: pointer; }
   #bar button[aria-pressed="false"] { color: var(--muted); }
-  #bar input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); }
-  #hint { right: 20px; top: 16px; color: var(--muted); text-align: right; }
+  #hint { margin-left: auto; color: var(--muted); text-align: right; }
+  button.pill { font: inherit; color: var(--muted); background: rgba(20, 29, 48, .8); cursor: pointer;
+                pointer-events: auto; }
+  button.pill:hover { color: var(--fg); border-color: var(--muted); }
+  button.pill.target { color: var(--accent); border-color: var(--accent); }
+  button.pill.on { color: #120c05; }
+  #info { right: 16px; top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+          background: rgba(10, 15, 26, .82); }
+  #info .name { color: var(--cyan); font-size: 14px; font-weight: 700; }
+  #info .sub { color: var(--muted); margin: 2px 0 8px; }
+  #info .m { display: grid; grid-template-columns: repeat(4, auto); gap: 1px 14px; text-align: right;
+             font-variant-numeric: tabular-nums; }
+  #info .m span:nth-child(4n) { color: var(--accent); }
+  #info .m span:nth-child(n+13) { color: #5d6a80; }
 
   /* teaser mode: big title card, no controls */
-  body.teaser #bar, body.teaser #hint { display: none; }
+  body.teaser #bar, body.teaser #info { display: none; }
   body.teaser #states { bottom: 34px; left: 40px; font-size: 18px; gap: 10px; }
   body.teaser .pill { padding: 5px 16px; transition: none; }
   body.teaser #title { left: 40px; top: 34px; font-size: 16px; }
@@ -39,6 +51,9 @@
   @media (max-width: 560px) {
     #states { bottom: 56px; font-size: 11px; gap: 3px; } .pill { padding: 2px 6px; }
     #hint { display: none; }
+    #title { display: none; }
+    #info { left: 12px; right: auto; top: 10px; font-size: 10px; padding: 6px 8px; }
+    #info .name { font-size: 11px; } #info .sub { margin-bottom: 4px; }
   }
 </style>
 <script type="importmap">
@@ -49,15 +64,15 @@
 </head>
 <body>
 <div id="title" class="hud"><b>Fetch &middot; forward kinematics</b>replayed from /xform_world</div>
-<div id="hint" class="hud">drag to orbit &middot; scroll to zoom</div>
+<div id="info" class="hud"></div>
 <div id="states" class="hud"></div>
 <div id="card" class="hud"><div><h1>Forward kinematics</h1><p>from scratch &middot; no libraries</p></div></div>
 <div id="fade" class="hud"></div>
 <div id="bar">
-  <button id="play" aria-label="Pause">&#10074;&#10074;</button>
-  <input id="time" type="range" min="0" max="1" step="0.01" value="0" aria-label="Time">
+  <button id="play" aria-pressed="false">&#9654; play all</button>
   <button id="showFrames" aria-pressed="true">frames</button>
   <button id="showTrail" aria-pressed="true">trail</button>
+  <span id="hint">click a part to inspect &middot; drag to orbit</span>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -145,10 +160,12 @@ for (const link of urdf.querySelectorAll('robot > link')) {
   part.traverse(o => {
     if (!o.isMesh) return;
     o.castShadow = o.receiveShadow = true;
+    o.material = o.material.clone();   // own copy, so this link alone can be highlighted
     materials.add(o.material);
   });
   const holder = new THREE.Group();
   holder.matrixAutoUpdate = false;
+  holder.userData.link = link.getAttribute('name');
   holder.add(part);
   holders[link.getAttribute('name')] = holder;
   scene.add(holder);
@@ -234,8 +251,10 @@ const tmp = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
 const ONE = new THREE.Vector3(1, 1, 1);
 const statesEl = document.getElementById('states');
 const stateNames = [...new Set(frames.map(f => f.state).filter(Boolean))];
-statesEl.innerHTML = 'FSM ' + stateNames.map(s => `<span class="pill" data-s="${s}">${s}</span>`).join('');
+const pillTag = TEASER ? 'span' : 'button';
+statesEl.innerHTML = 'FSM ' + stateNames.map(s => `<${pillTag} class="pill" data-s="${s}">${s}</${pillTag}>`).join('');
 let shownState = null;
+let stateOverride = null;   // interactive mode: the state to show while the robot rests
 
 function setPose(t, { meshOpacity = 1, skeletonOpacity = 1, trailStrength = 1 } = {}) {
   for (const name of linkNames) {
@@ -273,7 +292,7 @@ function setPose(t, { meshOpacity = 1, skeletonOpacity = 1, trailStrength = 1 } 
   for (const a of axes) a.material.opacity = skeletonOpacity;
   skeleton.visible = skeletonOpacity > 0.01;
 
-  const state = frames[frameAt(t)[0]].state;
+  const state = stateOverride || frames[frameAt(t)[0]].state;
   if (state !== shownState) {
     shownState = state;
     for (const pill of statesEl.children) pill.classList.toggle('on', pill.dataset.s === state);
@@ -322,9 +341,10 @@ if (TEASER) {
   };
   window.ready = true;
 } else {
-  // ---------- interactive replay ----------
+  // ---------- interactive: pick a state, click a part ----------
+  document.getElementById('title').innerHTML = '<b>Fetch &middot; your turn</b>pick a state below';
   // start further back on narrow (phone) screens so the whole robot fits
-  camera.position.set(3.4, -2.3, 1.7).sub(target).multiplyScalar(Math.max(1, 1.3 / camera.aspect)).add(target);
+  camera.position.set(3.0, 2.6, 1.6).sub(target).multiplyScalar(Math.max(1, 1.3 / camera.aspect)).add(target);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(target);
   controls.enableDamping = true;
@@ -333,16 +353,49 @@ if (TEASER) {
   controls.maxPolarAngle = Math.PI * 0.495;
   controls.update();
 
-  const playButton = document.getElementById('play'), slider = document.getElementById('time');
-  slider.max = duration;
-  let playing = true, t = 0, last = performance.now();
+  // The recording repeats the choreography; one cycle runs from one 'hello' start to the next.
+  // A state is "reached" when the FSM leaves it (its targets are within epsilon).
+  const runs = [];   // [{state, start, end}]
+  frames.forEach((f, i) => {
+    if (i === 0 || f.state !== frames[i - 1].state) runs.push({ state: f.state, start: times[i] });
+    runs[runs.length - 1].end = times[Math.min(i + 1, times.length - 1)];
+  });
+  const firstState = runs[0].state;
+  const cycleEnd = runs.find((r, k) => k > 0 && r.state === firstState).start;
+  const cycle = cycleEnd - runs[0].start;
+  const arrival = {};   // state -> time in the first cycle when the robot has reached it
+  for (const r of runs) if (!(r.state in arrival) && r.end <= cycleEnd + 1e-6) arrival[r.state] = r.end;
+  const restAt0 = runs.filter(r => r.end <= cycleEnd + 1e-6).pop().state;   // pose at t = 0 = end of cycle
+  arrival[restAt0] = cycleEnd;
+
+  // the first frame is already one servo step into the move, so rest at the cycle's end instead
+  let t = cycleEnd, goal = null, playing = false, last = performance.now();
+  stateOverride = restAt0;
   const options = { skeletonOpacity: 0.35, trailStrength: 1 };
+  const playButton = document.getElementById('play');
+  const pills = [...statesEl.querySelectorAll('button.pill')];
+  const setTarget = name => pills.forEach(p => p.classList.toggle('target', p.dataset.s === name));
+
+  for (const pill of pills) {
+    pill.onclick = () => {
+      if (playing) playButton.click();
+      // the FSM only runs forward, so go around the cycle to the state's arrival
+      let d = (((arrival[pill.dataset.s] - t) % cycle) + cycle) % cycle;
+      if (d < 0.05 && !goal) return;              // already there
+      if (d < 0.05) d += cycle;
+      goal = { time: t + d, state: pill.dataset.s, speed: Math.max(1, d / 2.2) };
+      stateOverride = null;
+      setTarget(goal.state);
+    };
+  }
   playButton.onclick = () => {
     playing = !playing;
-    playButton.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
-    playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    playButton.setAttribute('aria-pressed', String(playing));
+    playButton.innerHTML = playing ? '&#10074;&#10074; pause' : '&#9654; play all';
+    goal = null;
+    setTarget(null);
+    stateOverride = null;
   };
-  slider.oninput = () => { t = Number(slider.value); };
   for (const [id, field, on] of [['showFrames', 'skeletonOpacity', 0.35], ['showTrail', 'trailStrength', 1]]) {
     const button = document.getElementById(id);
     button.onclick = () => {
@@ -351,14 +404,69 @@ if (TEASER) {
       options[field] = pressed ? on : 0;
     };
   }
-  renderer.setAnimationLoop(now => {
-    if (playing) {
-      t += Math.min(0.1, (now - last) / 1000);
-      if (t > duration) t = 0;
-      slider.value = t;
+
+  // ---- click a part: highlight it and show its /xform_world matrix ----
+  const info = document.getElementById('info');
+  const jointOf = {};   // child link -> its parent joint
+  for (const j of urdf.querySelectorAll('robot > joint')) {
+    jointOf[j.querySelector('child').getAttribute('link')] =
+      { name: j.getAttribute('name'), type: j.getAttribute('type'), parent: j.querySelector('parent').getAttribute('link') };
+  }
+  let selected = null;
+  function select(name) {
+    selected = name;
+    for (const [link, holder] of Object.entries(holders)) {
+      holder.traverse(o => {
+        if (!o.isMesh) return;
+        o.material.emissive.set(link === name ? 0x5ad1ff : 0x000000);
+        o.material.emissiveIntensity = 0.35;
+      });
     }
+    axes.forEach((a, k) => a.scale.setScalar(linkNames[k] === name ? 2.2 : 1));
+    const j = jointOf[name];
+    info.innerHTML = `<div class="name">${name}</div><div class="sub">${
+      j ? `${j.type} joint ${j.name}<br>parent link ${j.parent}` : 'root link'}</div>
+      <div class="sub">world matrix from /xform_world</div><div class="m"></div>`;
+  }
+  const matrixEl = () => info.querySelector('.m');
+  const pointer = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+  let down = null;
+  renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener('pointerup', e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;   // that was a drag
+    pointer.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObjects(Object.values(holders), true)[0];
+    let o = hit && hit.object;
+    while (o && !o.userData.link) o = o.parent;
+    if (o) select(o.userData.link);
+  });
+  select('gripper_link');
+
+  const m4 = new THREE.Matrix4();
+  let trailFade = 0;   // the trail shows only while the robot moves
+  renderer.setAnimationLoop(now => {
+    const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    setPose(t, options);
+    if (playing) {
+      t += dt;
+    } else if (goal) {
+      t = Math.min(goal.time, t + dt * goal.speed);
+      if (t >= goal.time) { stateOverride = goal.state; goal = null; setTarget(null); }
+    }
+    // keep t in the recording: the pose one cycle earlier is the same
+    if (playing ? t >= cycleEnd + cycle : !goal && t > cycleEnd + 0.05) t -= cycle;
+    trailFade = playing || goal ? 1 : Math.max(0, trailFade - dt / 0.6);
+    setPose(t, { ...options, trailStrength: options.trailStrength * trailFade });
+    if (selected && poses[selected]) {
+      poseAt(selected, t, tmp);
+      const e = m4.compose(tmp.p, tmp.q, ONE).elements;   // column-major, as published
+      let cells = '';
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 4; col++) {
+        cells += `<span>${e[4 * col + row].toFixed(3)}</span>`;
+      }
+      matrixEl().innerHTML = cells;
+    }
     controls.update();
     renderer.render(scene, camera);
   });
